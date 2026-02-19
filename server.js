@@ -18,11 +18,11 @@ const pool = mysql.createPool({
     try {
         // Users table (as before)
         await pool.query(`
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE IF NOT EXISTS temp (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 username VARCHAR(255) NOT NULL,
                 device_id VARCHAR(255) UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
@@ -31,8 +31,8 @@ const pool = mysql.createPool({
             CREATE TABLE IF NOT EXISTS user_locations (
                 user_id INT PRIMARY KEY,
                 username VARCHAR(255) NOT NULL,
-                latitude DOUBLE NOT NULL,
-                longitude DOUBLE NOT NULL,
+                latitude DOUBLE NULL,
+                longitude DOUBLE NULL,
                 timestamp BIGINT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
