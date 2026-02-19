@@ -18,11 +18,11 @@ const pool = mysql.createPool({
     try {
         // Users table (as before)
         await pool.query(`
-            CREATE TABLE IF NOT EXISTS temp (
+            CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 username VARCHAR(255) NOT NULL,
                 device_id VARCHAR(255) UNIQUE NOT NULL,
-                time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
