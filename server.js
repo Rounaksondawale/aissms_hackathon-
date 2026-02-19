@@ -16,7 +16,7 @@ const pool = mysql.createPool({
 // Create tables if they don't exist
 (async () => {
     try {
-        // Users table
+        // Users table (as before)
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -26,16 +26,15 @@ const pool = mysql.createPool({
             )
         `);
 
-        // Locations table
+        // User locations table – one row per user (latest location)
         await pool.query(`
-            CREATE TABLE IF NOT EXISTS locations (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id INT NOT NULL,
+            CREATE TABLE IF NOT EXISTS user_locations (
+                user_id INT PRIMARY KEY,
                 username VARCHAR(255) NOT NULL,
                 latitude DOUBLE NOT NULL,
                 longitude DOUBLE NOT NULL,
                 timestamp BIGINT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
 
@@ -45,7 +44,7 @@ const pool = mysql.createPool({
     }
 })();
 
-// Registration endpoint
+// Registration endpoint (unchanged)
 app.post('/api/register', async (req, res) => {
     const { username, deviceId } = req.body;
     if (!username || !deviceId) {
@@ -53,15 +52,12 @@ app.post('/api/register', async (req, res) => {
     }
 
     try {
-        // Try to insert new user
         const [result] = await pool.query(
             'INSERT INTO users (username, device_id) VALUES (?, ?)',
             [username, deviceId]
         );
-        // Success – new user created
         res.json({ userId: result.insertId });
     } catch (err) {
-        // If device_id already exists, return the existing user's ID
         if (err.code === 'ER_DUP_ENTRY') {
             const [rows] = await pool.query(
                 'SELECT id FROM users WHERE device_id = ?',
@@ -71,13 +67,12 @@ app.post('/api/register', async (req, res) => {
                 return res.json({ userId: rows[0].id });
             }
         }
-        // Other error
         console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Location update endpoint
+// Location update endpoint – UPSERT (insert or update)
 app.post('/api/location', async (req, res) => {
     const { userId, username, latitude, longitude, timestamp } = req.body;
     
@@ -87,7 +82,13 @@ app.post('/api/location', async (req, res) => {
 
     try {
         await pool.query(
-            'INSERT INTO locations (user_id, username, latitude, longitude, timestamp) VALUES (?, ?, ?, ?, ?)',
+            `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp)
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+             username = VALUES(username),
+             latitude = VALUES(latitude),
+             longitude = VALUES(longitude),
+             timestamp = VALUES(timestamp)`,
             [userId, username, latitude, longitude, timestamp]
         );
         res.json({ success: true });
