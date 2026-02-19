@@ -90,7 +90,7 @@ app.post('/api/location', async (req, res) => {
              longitude = VALUES(longitude),
              timestamp = VALUES(timestamp)`,
             [userId, username, latitude, longitude, timestamp]
-        );
+        ); 
         res.json({ success: true });
     } catch (err) {
         console.error(err);
