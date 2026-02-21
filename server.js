@@ -13,10 +13,24 @@ const pool = mysql.createPool({
     waitForConnections: true,
 });
 
+// Helper function to get current IST as MySQL DATETIME string (YYYY-MM-DD HH:MM:SS)
+function getISTDateTime() {
+    const now = new Date();
+    // IST is UTC+5:30
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const year = istTime.getUTCFullYear();
+    const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istTime.getUTCDate()).padStart(2, '0');
+    const hours = String(istTime.getUTCHours()).padStart(2, '0');
+    const minutes = String(istTime.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(istTime.getUTCSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 // Create tables if they don't exist
 (async () => {
     try {
-        // Users table (as before)
+        // Users table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -27,6 +41,7 @@ const pool = mysql.createPool({
         `);
 
         // User locations table – one row per user (latest location)
+        // updated_at stored in IST (manually set)
         await pool.query(`
             CREATE TABLE IF NOT EXISTS user_locations (
                 user_id INT PRIMARY KEY,
@@ -34,7 +49,7 @@ const pool = mysql.createPool({
                 latitude DOUBLE NULL,
                 longitude DOUBLE NULL,
                 timestamp BIGINT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                updated_at DATETIME NOT NULL
             )
         `);
 
@@ -44,7 +59,7 @@ const pool = mysql.createPool({
     }
 })();
 
-// Registration endpoint (unchanged)
+// Registration endpoint
 app.post('/api/register', async (req, res) => {
     const { username, deviceId } = req.body;
     if (!username || !deviceId) {
@@ -72,7 +87,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// Location update endpoint – UPSERT (insert or update)
+// Location update endpoint – UPSERT (insert or update) with IST timestamp
 app.post('/api/location', async (req, res) => {
     const { userId, username, latitude, longitude, timestamp } = req.body;
     
@@ -80,17 +95,20 @@ app.post('/api/location', async (req, res) => {
         return res.status(400).json({ error: 'Missing fields' });
     }
 
+    const istNow = getISTDateTime();
+
     try {
         await pool.query(
-            `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
              username = VALUES(username),
              latitude = VALUES(latitude),
              longitude = VALUES(longitude),
-             timestamp = VALUES(timestamp)`,
-            [userId, username, latitude, longitude, timestamp]
-        ); 
+             timestamp = VALUES(timestamp),
+             updated_at = VALUES(updated_at)`,
+            [userId, username, latitude, longitude, timestamp, istNow]
+        );
         res.json({ success: true });
     } catch (err) {
         console.error(err);
