@@ -27,8 +27,10 @@ function getISTDateTime() {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
-// Create tables if they don't exist and add missing columns
-(async () => {
+// ----------------------------------------------------------------------
+// Table creation (runs once at startup, but we also have fallback below)
+// ----------------------------------------------------------------------
+async function createTables() {
     try {
         // Users table
         await pool.query(`
@@ -39,10 +41,9 @@ function getISTDateTime() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        console.log('Users table ready');
+        console.log('✅ Users table ready');
 
         // User locations table – one row per user (latest location)
-        // Includes fcm_token column to store push notification token
         await pool.query(`
             CREATE TABLE IF NOT EXISTS user_locations (
                 user_id INT PRIMARY KEY,
@@ -54,25 +55,60 @@ function getISTDateTime() {
                 updated_at DATETIME NOT NULL
             )
         `);
-        console.log('User locations table ready');
+        console.log('✅ User locations table ready');
 
-        // In case the table existed before we added the fcm_token column,
-        // attempt to add it now (ignores error if already present).
+        // Ensure fcm_token column exists (for older tables)
         try {
             await pool.query(`ALTER TABLE user_locations ADD COLUMN fcm_token VARCHAR(255) NULL`);
-            console.log('Added fcm_token column to user_locations table');
+            console.log('✅ Added fcm_token column to user_locations table');
         } catch (err) {
-            // Column already exists (error code ER_DUP_FIELDNAME = 1060)
-            if (err.code !== 'ER_DUP_FIELDNAME') {
-                console.error('Error adding fcm_token column', err);
+            if (err.code === 'ER_DUP_FIELDNAME') {
+                // Column already exists – fine
+                console.log('ℹ️ fcm_token column already exists');
+            } else {
+                console.error('⚠️ Error adding fcm_token column:', err.message);
             }
         }
     } catch (err) {
-        console.error('Error creating tables', err);
+        console.error('❌ Error during table creation:', err);
+        // We do NOT exit – the endpoint will attempt to create on demand.
     }
-})();
+}
 
+// Run table creation (non‑blocking, but we log results)
+createTables();
+
+// ----------------------------------------------------------------------
+// Helper to ensure the table exists (used in location endpoint)
+// ----------------------------------------------------------------------
+async function ensureUserLocationsTable() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS user_locations (
+                user_id INT PRIMARY KEY,
+                username VARCHAR(255) NOT NULL,
+                latitude DOUBLE NULL,
+                longitude DOUBLE NULL,
+                timestamp BIGINT NOT NULL,
+                fcm_token VARCHAR(255) NULL,
+                updated_at DATETIME NOT NULL
+            )
+        `);
+        // Also ensure fcm_token column (for very old tables)
+        try {
+            await pool.query(`ALTER TABLE user_locations ADD COLUMN fcm_token VARCHAR(255) NULL`);
+        } catch (err) {
+            if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+        }
+    } catch (err) {
+        console.error('❌ Failed to create user_locations table on demand:', err);
+        throw err;
+    }
+}
+
+// ----------------------------------------------------------------------
 // Registration endpoint
+// ----------------------------------------------------------------------
 app.post('/api/register', async (req, res) => {
     const { username, deviceId } = req.body;
     if (!username || !deviceId) {
@@ -100,38 +136,58 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// Location update endpoint – UPSERT (insert or update) with IST timestamp and optional fcmToken
-// This preserves existing latitude/longitude when null is sent (token-only updates).
+// ----------------------------------------------------------------------
+// Location update endpoint – UPSERT with conditional updates
+// ----------------------------------------------------------------------
 app.post('/api/location', async (req, res) => {
     const { userId, username, latitude, longitude, timestamp, fcmToken } = req.body;
-    
+
     if (!userId || !username || latitude === undefined || longitude === undefined || !timestamp) {
         return res.status(400).json({ error: 'Missing fields' });
     }
 
     const istNow = getISTDateTime();
 
+    // Attempt the insert – if table missing, create it and retry once
     try {
-        await pool.query(
-            `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp, fcm_token, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-             username = VALUES(username),
-             latitude = IF(VALUES(latitude) IS NOT NULL, VALUES(latitude), latitude),
-             longitude = IF(VALUES(longitude) IS NOT NULL, VALUES(longitude), longitude),
-             timestamp = VALUES(timestamp),
-             fcm_token = IF(VALUES(fcm_token) IS NOT NULL, VALUES(fcm_token), fcm_token),
-             updated_at = VALUES(updated_at)`,
-            [userId, username, latitude, longitude, timestamp, fcmToken || null, istNow]
-        );
+        await performUpsert(userId, username, latitude, longitude, timestamp, fcmToken, istNow);
         res.json({ success: true });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
+        if (err.code === 'ER_NO_SUCH_TABLE') {
+            console.log('⚠️ user_locations table missing – attempting to create it now...');
+            try {
+                await ensureUserLocationsTable();
+                // Retry the upsert
+                await performUpsert(userId, username, latitude, longitude, timestamp, fcmToken, istNow);
+                res.json({ success: true });
+            } catch (retryErr) {
+                console.error('❌ Still failed after creating table:', retryErr);
+                res.status(500).json({ error: retryErr.message });
+            }
+        } else {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
     }
 });
 
+// Separated upsert logic for clarity
+async function performUpsert(userId, username, latitude, longitude, timestamp, fcmToken, istNow) {
+    await pool.query(
+        `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp, fcm_token, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+         username = VALUES(username),
+         latitude = IF(VALUES(latitude) IS NOT NULL, VALUES(latitude), latitude),
+         longitude = IF(VALUES(longitude) IS NOT NULL, VALUES(longitude), longitude),
+         timestamp = VALUES(timestamp),
+         fcm_token = IF(VALUES(fcm_token) IS NOT NULL, VALUES(fcm_token), fcm_token),
+         updated_at = VALUES(updated_at)`,
+        [userId, username, latitude, longitude, timestamp, fcmToken || null, istNow]
+    );
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
 });
