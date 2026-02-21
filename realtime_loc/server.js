@@ -28,7 +28,7 @@ function getISTDateTime() {
 }
 
 // ----------------------------------------------------------------------
-// Table creation (runs once at startup, but we also have fallback below)
+// Table creation (runs once at startup)
 // ----------------------------------------------------------------------
 async function createTables() {
     try {
@@ -63,7 +63,6 @@ async function createTables() {
             console.log('✅ Added fcm_token column to user_locations table');
         } catch (err) {
             if (err.code === 'ER_DUP_FIELDNAME') {
-                // Column already exists – fine
                 console.log('ℹ️ fcm_token column already exists');
             } else {
                 console.error('⚠️ Error adding fcm_token column:', err.message);
@@ -71,16 +70,32 @@ async function createTables() {
         }
     } catch (err) {
         console.error('❌ Error during table creation:', err);
-        // We do NOT exit – the endpoint will attempt to create on demand.
     }
 }
 
-// Run table creation (non‑blocking, but we log results)
+// Run table creation (non‑blocking)
 createTables();
 
 // ----------------------------------------------------------------------
-// Helper to ensure the table exists (used in location endpoint)
+// Helper to ensure the users table exists (used in registration endpoint)
 // ----------------------------------------------------------------------
+async function ensureUsersTable() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(255) NOT NULL,
+                device_id VARCHAR(255) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+    } catch (err) {
+        console.error('❌ Failed to create users table on demand:', err);
+        throw err;
+    }
+}
+
+// Helper to ensure the user_locations table exists (used in location endpoint)
 async function ensureUserLocationsTable() {
     try {
         await pool.query(`
@@ -107,7 +122,7 @@ async function ensureUserLocationsTable() {
 }
 
 // ----------------------------------------------------------------------
-// Registration endpoint
+// Registration endpoint (with on‑demand table creation)
 // ----------------------------------------------------------------------
 app.post('/api/register', async (req, res) => {
     const { username, deviceId } = req.body;
@@ -123,12 +138,27 @@ app.post('/api/register', async (req, res) => {
         res.json({ userId: result.insertId });
     } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
+            // Device already registered – return existing user ID
             const [rows] = await pool.query(
                 'SELECT id FROM users WHERE device_id = ?',
                 [deviceId]
             );
             if (rows.length > 0) {
                 return res.json({ userId: rows[0].id });
+            }
+        } else if (err.code === 'ER_NO_SUCH_TABLE') {
+            // Table missing – create it and retry once
+            console.log('⚠️ users table missing – creating it now...');
+            try {
+                await ensureUsersTable();
+                const [result] = await pool.query(
+                    'INSERT INTO users (username, device_id) VALUES (?, ?)',
+                    [username, deviceId]
+                );
+                return res.json({ userId: result.insertId });
+            } catch (retryErr) {
+                console.error('❌ Registration failed after creating table:', retryErr);
+                return res.status(500).json({ error: retryErr.message });
             }
         }
         console.error(err);
@@ -137,7 +167,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------
-// Location update endpoint – UPSERT with conditional updates
+// Location update endpoint (with on‑demand table creation)
 // ----------------------------------------------------------------------
 app.post('/api/location', async (req, res) => {
     const { userId, username, latitude, longitude, timestamp, fcmToken } = req.body;
@@ -148,20 +178,18 @@ app.post('/api/location', async (req, res) => {
 
     const istNow = getISTDateTime();
 
-    // Attempt the insert – if table missing, create it and retry once
     try {
         await performUpsert(userId, username, latitude, longitude, timestamp, fcmToken, istNow);
         res.json({ success: true });
     } catch (err) {
         if (err.code === 'ER_NO_SUCH_TABLE') {
-            console.log('⚠️ user_locations table missing – attempting to create it now...');
+            console.log('⚠️ user_locations table missing – creating it now...');
             try {
                 await ensureUserLocationsTable();
-                // Retry the upsert
                 await performUpsert(userId, username, latitude, longitude, timestamp, fcmToken, istNow);
                 res.json({ success: true });
             } catch (retryErr) {
-                console.error('❌ Still failed after creating table:', retryErr);
+                console.error('❌ Location update failed after creating table:', retryErr);
                 res.status(500).json({ error: retryErr.message });
             }
         } else {
