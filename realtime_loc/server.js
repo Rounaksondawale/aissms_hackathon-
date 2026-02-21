@@ -42,7 +42,7 @@ function getISTDateTime() {
         console.log('Users table ready');
 
         // User locations table – one row per user (latest location)
-        // Added fcm_token column to store push notification token
+        // Includes fcm_token column to store push notification token
         await pool.query(`
             CREATE TABLE IF NOT EXISTS user_locations (
                 user_id INT PRIMARY KEY,
@@ -56,7 +56,8 @@ function getISTDateTime() {
         `);
         console.log('User locations table ready');
 
-        // Check if fcm_token column exists (for older databases)
+        // In case the table existed before we added the fcm_token column,
+        // attempt to add it now (ignores error if already present).
         try {
             await pool.query(`ALTER TABLE user_locations ADD COLUMN fcm_token VARCHAR(255) NULL`);
             console.log('Added fcm_token column to user_locations table');
@@ -100,6 +101,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // Location update endpoint – UPSERT (insert or update) with IST timestamp and optional fcmToken
+// This preserves existing latitude/longitude when null is sent (token-only updates).
 app.post('/api/location', async (req, res) => {
     const { userId, username, latitude, longitude, timestamp, fcmToken } = req.body;
     
@@ -115,8 +117,8 @@ app.post('/api/location', async (req, res) => {
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
              username = VALUES(username),
-             latitude = VALUES(latitude),
-             longitude = VALUES(longitude),
+             latitude = IF(VALUES(latitude) IS NOT NULL, VALUES(latitude), latitude),
+             longitude = IF(VALUES(longitude) IS NOT NULL, VALUES(longitude), longitude),
              timestamp = VALUES(timestamp),
              fcm_token = IF(VALUES(fcm_token) IS NOT NULL, VALUES(fcm_token), fcm_token),
              updated_at = VALUES(updated_at)`,
