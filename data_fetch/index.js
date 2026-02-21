@@ -26,12 +26,12 @@ app.get('/', (req, res) => {
 app.get('/api/locations', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
-        // Replace 'your_table_name' with the actual table name
-        const [rows] = await connection.execute('SELECT * FROM user_locations);
+        // 🔁 Make sure 'user_locations' is your actual table name
+        const [rows] = await connection.execute('SELECT * FROM user_locations'); // Fixed missing quote
         await connection.end();
         res.json(rows);
     } catch (err) {
-        console.error(err);
+        console.error('Database error:', err);
         res.status(500).json({ error: 'Database error' });
     }
 });
