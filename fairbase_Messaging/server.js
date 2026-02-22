@@ -1,3 +1,10 @@
+console.log("ENV CHECK:", {
+  host: process.env.MYSQLHOST,
+  user: process.env.MYSQLUSER,
+  db: process.env.MYSQLDATABASE,
+  port: process.env.MYSQLPORT,
+});
+
 const express = require("express");
 const mysql = require("mysql2/promise");
 const admin = require("firebase-admin");
@@ -23,9 +30,8 @@ const db = mysql.createPool({
   user: process.env.MYSQLUSER,
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
-  port: process.env.MYSQLPORT,
-  waitForConnections: true,
-  connectionLimit: 10,
+  port: Number(process.env.MYSQLPORT),
+  ssl: { rejectUnauthorized: false }, // IMPORTANT
 });
 
 /* ---------- Send FCM ---------- */
