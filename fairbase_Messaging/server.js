@@ -21,9 +21,9 @@ app.use(cors());
 app.use(bodyParser.json());
 
 /************************************
- * Debug ENV (Remove Later)
+ * Debug ENV (Remove After Testing)
  ************************************/
-console.log("✅ MYSQL_URL:", process.env.MYSQL_URL);
+console.log("MYSQL_PUBLIC_URL =", process.env.MYSQL_PUBLIC_URL);
 
 /************************************
  * Firebase Setup
@@ -35,12 +35,20 @@ admin.initializeApp({
 });
 
 /************************************
- * MySQL Connection (Railway)
+ * MySQL Connection (Railway PUBLIC)
  ************************************/
-const db = mysql.createPool(process.env.MYSQL_URL);
+const db = mysql.createPool({
+  uri: process.env.MYSQL_PUBLIC_URL, // ✅ IMPORTANT
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 /************************************
- * Test DB Connection
+ * Test Database Connection
  ************************************/
 (async () => {
   try {
@@ -72,14 +80,14 @@ async function sendNotification(token, id) {
 
     await admin.messaging().send(message);
 
-    console.log("📩 Notification sent to:", token);
+    console.log("📩 Sent notification to:", token);
   } catch (err) {
     console.error("❌ FCM Error:", err);
   }
 }
 
 /************************************
- * Check DB Every 5 Seconds
+ * Check New Records Every 5 Seconds
  ************************************/
 setInterval(async () => {
   try {
@@ -91,11 +99,11 @@ setInterval(async () => {
 
     if (rows.length === 0) return;
 
-    for (let row of rows) {
+    for (const row of rows) {
       if (row.fcm_token) {
         await sendNotification(row.fcm_token, row.location_id);
 
-        console.log("✅ Sent to:", row.username || row.name);
+        console.log("✅ Alert sent to:", row.username || row.name);
       }
     }
   } catch (err) {
@@ -128,7 +136,7 @@ app.post("/response", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Response saved",
+      message: "Response saved successfully",
     });
   } catch (err) {
     console.error("❌ Update Error:", err);
@@ -141,7 +149,7 @@ app.post("/response", async (req, res) => {
 });
 
 /************************************
- * Health Check Route
+ * Health Check
  ************************************/
 app.get("/", (req, res) => {
   res.send("🚀 SOS Rescue Backend Running");
