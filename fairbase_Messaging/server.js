@@ -84,6 +84,8 @@ app.post("/response", async (req, res) => {
 
 /* ---------- Start Server ---------- */
 
-app.listen(8080, () => {
-  console.log("Server running on 8080");
+const PORT = process.env.PORT || 8080;
+
+app.listen(PORT, () => {
+  console.log("Server running on", PORT);
 });
