@@ -1,9 +1,4 @@
 /************************************
- * Load Environment Variables
- ************************************/
-require("dotenv").config();
-
-/************************************
  * Imports
  ************************************/
 const express = require("express");
@@ -21,7 +16,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 /************************************
- * Debug ENV (Remove After Testing)
+ * Debug ENV
  ************************************/
 console.log("MYSQL_PUBLIC_URL =", process.env.MYSQL_PUBLIC_URL);
 
@@ -35,10 +30,10 @@ admin.initializeApp({
 });
 
 /************************************
- * MySQL Connection (Railway PUBLIC)
+ * MySQL Connection (Railway)
  ************************************/
 const db = mysql.createPool({
-  uri: process.env.MYSQL_PUBLIC_URL, // ✅ IMPORTANT
+  uri: process.env.MYSQL_PUBLIC_URL,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -48,7 +43,7 @@ const db = mysql.createPool({
 });
 
 /************************************
- * Test Database Connection
+ * Test DB Connection
  ************************************/
 (async () => {
   try {
@@ -80,20 +75,20 @@ async function sendNotification(token, id) {
 
     await admin.messaging().send(message);
 
-    console.log("📩 Sent notification to:", token);
+    console.log("📩 Notification sent to:", token);
   } catch (err) {
     console.error("❌ FCM Error:", err);
   }
 }
 
 /************************************
- * Check New Records Every 5 Seconds
+ * Check circle_selection Every 5s
  ************************************/
 setInterval(async () => {
   try {
     const [rows] = await db.query(`
       SELECT *
-      FROM user_locations
+      FROM circle_selection
       WHERE safe IS NULL
     `);
 
@@ -101,7 +96,7 @@ setInterval(async () => {
 
     for (const row of rows) {
       if (row.fcm_token) {
-        await sendNotification(row.fcm_token, row.location_id);
+        await sendNotification(row.fcm_token, row.id);
 
         console.log("✅ Alert sent to:", row.username || row.name);
       }
@@ -116,22 +111,22 @@ setInterval(async () => {
  ************************************/
 app.post("/response", async (req, res) => {
   try {
-    const { location_id, safe, comment } = req.body;
+    const { id, safe, comment } = req.body;
 
-    if (!location_id) {
+    if (!id) {
       return res.status(400).json({
         success: false,
-        message: "location_id is required",
+        message: "id is required",
       });
     }
 
     await db.query(
       `
-      UPDATE user_locations
+      UPDATE circle_selection
       SET safe = ?, comment = ?
-      WHERE location_id = ?
+      WHERE id = ?
     `,
-      [safe, comment || null, location_id]
+      [safe, comment || null, id]
     );
 
     res.json({
