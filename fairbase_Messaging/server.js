@@ -1,100 +1,157 @@
-console.log("ENV CHECK:", {
-  host: process.env.MYSQLHOST,
-  user: process.env.MYSQLUSER,
-  db: process.env.MYSQLDATABASE,
-  port: process.env.MYSQLPORT,
-});
+/************************************
+ * Load Environment Variables
+ ************************************/
+require("dotenv").config();
 
+/************************************
+ * Imports
+ ************************************/
 const express = require("express");
 const mysql = require("mysql2/promise");
 const admin = require("firebase-admin");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 
+/************************************
+ * App Setup
+ ************************************/
 const app = express();
+
 app.use(cors());
 app.use(bodyParser.json());
 
-/* ---------- Firebase Setup ---------- */
+/************************************
+ * Debug ENV (Remove Later)
+ ************************************/
+console.log("✅ MYSQL_URL:", process.env.MYSQL_URL);
 
-const serviceAccount = require("./firebase-key.json"); // Download from Firebase
+/************************************
+ * Firebase Setup
+ ************************************/
+const serviceAccount = require("./firebase-key.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-/* ---------- MySQL Connection ---------- */
+/************************************
+ * MySQL Connection (Railway)
+ ************************************/
+const db = mysql.createPool(process.env.MYSQL_URL);
 
-const db = mysql.createPool({
-  host: process.env.MYSQLHOST,
-  user: process.env.MYSQLUSER,
-  password: process.env.MYSQLPASSWORD,
-  database: process.env.MYSQLDATABASE,
-  port: Number(process.env.MYSQLPORT),
-  ssl: { rejectUnauthorized: false }, // IMPORTANT
-});
+/************************************
+ * Test DB Connection
+ ************************************/
+(async () => {
+  try {
+    const conn = await db.getConnection();
+    console.log("✅ MySQL Connected Successfully");
+    conn.release();
+  } catch (err) {
+    console.error("❌ MySQL Connection Failed:", err);
+  }
+})();
 
-/* ---------- Send FCM ---------- */
-
+/************************************
+ * Send FCM Notification
+ ************************************/
 async function sendNotification(token, id) {
-  const message = {
-    token: token,
+  try {
+    const message = {
+      token: token,
 
-    notification: {
-      title: "Safety Alert 🚨",
-      body: "Are you safe? Please respond.",
-    },
+      notification: {
+        title: "Safety Alert 🚨",
+        body: "Are you safe? Please respond.",
+      },
 
-    data: {
-      record_id: id.toString(),
-    },
-  };
+      data: {
+        record_id: id.toString(),
+      },
+    };
 
-  await admin.messaging().send(message);
+    await admin.messaging().send(message);
+
+    console.log("📩 Notification sent to:", token);
+  } catch (err) {
+    console.error("❌ FCM Error:", err);
+  }
 }
 
-/* ---------- Check New Records Every 5s ---------- */
-
+/************************************
+ * Check DB Every 5 Seconds
+ ************************************/
 setInterval(async () => {
   try {
     const [rows] = await db.query(`
-      SELECT * FROM user_locations
+      SELECT *
+      FROM user_locations
       WHERE safe IS NULL
     `);
+
+    if (rows.length === 0) return;
 
     for (let row of rows) {
       if (row.fcm_token) {
         await sendNotification(row.fcm_token, row.location_id);
 
-        console.log("Sent to:", row.name);
+        console.log("✅ Sent to:", row.username || row.name);
       }
     }
   } catch (err) {
-    console.error(err);
+    console.error("❌ DB Query Error:", err);
   }
-}, 5000); // every 5 sec
+}, 5000);
 
-/* ---------- Receive User Response ---------- */
-
+/************************************
+ * Receive User Response
+ ************************************/
 app.post("/response", async (req, res) => {
-  const { location_id, safe, comment } = req.body;
+  try {
+    const { location_id, safe, comment } = req.body;
 
-  await db.query(
-    `
-    UPDATE user_locations
-    SET safe = ?, comment = ?
-    WHERE location_id = ?
-  `,
-    [safe, comment, location_id]
-  );
+    if (!location_id) {
+      return res.status(400).json({
+        success: false,
+        message: "location_id is required",
+      });
+    }
 
-  res.json({ success: true });
+    await db.query(
+      `
+      UPDATE user_locations
+      SET safe = ?, comment = ?
+      WHERE location_id = ?
+    `,
+      [safe, comment || null, location_id]
+    );
+
+    res.json({
+      success: true,
+      message: "Response saved",
+    });
+  } catch (err) {
+    console.error("❌ Update Error:", err);
+
+    res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
+  }
 });
 
-/* ---------- Start Server ---------- */
+/************************************
+ * Health Check Route
+ ************************************/
+app.get("/", (req, res) => {
+  res.send("🚀 SOS Rescue Backend Running");
+});
 
+/************************************
+ * Start Server
+ ************************************/
 const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log(`✅ Server running on port ${PORT}`);
 });
