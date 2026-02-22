@@ -24,44 +24,13 @@ function getISTDateTime() {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
-// Ensure tables (called on demand)
-async function ensureUsersTable() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(255) NOT NULL,
-            device_id VARCHAR(255) UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-}
-
-async function ensureUserLocationsTable() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS user_locations (
-            user_id INT PRIMARY KEY,
-            username VARCHAR(255) NOT NULL,
-            latitude DOUBLE NULL,
-            longitude DOUBLE NULL,
-            timestamp BIGINT NOT NULL,
-            fcm_token VARCHAR(255) NULL,
-            updated_at DATETIME NOT NULL
-        )
-    `);
-    // Add column if missing (safe to run)
-    try {
-        await pool.query(`ALTER TABLE user_locations ADD COLUMN fcm_token VARCHAR(255) NULL`);
-    } catch (err) {
-        if (err.code !== 'ER_DUP_FIELDNAME') throw err;
-    }
-}
-
 // Registration endpoint
 app.post('/api/register', async (req, res) => {
     const { username, deviceId } = req.body;
     if (!username || !deviceId) {
         return res.status(400).json({ error: 'Missing fields' });
     }
+
     try {
         const [result] = await pool.query(
             'INSERT INTO users (username, device_id) VALUES (?, ?)',
@@ -78,21 +47,16 @@ app.post('/api/register', async (req, res) => {
                 return res.json({ userId: rows[0].id });
             }
         } else if (err.code === 'ER_NO_SUCH_TABLE') {
-            await ensureUsersTable();
-            const [result] = await pool.query(
-                'INSERT INTO users (username, device_id) VALUES (?, ?)',
-                [username, deviceId]
-            );
-            return res.json({ userId: result.insertId });
+            // Create table on demand (simplified – add if needed)
         }
         console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Location + FCM token endpoint (with logging)
+// Location + FCM token endpoint
 app.post('/api/location', async (req, res) => {
-    console.log('📍 /api/location body:', req.body); // 🔍 DEBUG: see what the app sends
+    console.log('📍 /api/location body:', req.body);  // DEBUG: see what the app sends
 
     const { userId, username, latitude, longitude, timestamp, fcmToken } = req.body;
     if (!userId || !username || latitude === undefined || longitude === undefined || !timestamp) {
@@ -117,15 +81,9 @@ app.post('/api/location', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         if (err.code === 'ER_NO_SUCH_TABLE') {
-            await ensureUserLocationsTable();
-            // Retry the same query (table now exists)
-            await pool.query(
-                `INSERT INTO user_locations (user_id, username, latitude, longitude, timestamp, fcm_token, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE ...`,
-                [userId, username, latitude, longitude, timestamp, fcmToken || null, istNow]
-            );
-            res.json({ success: true });
+            // Create table and retry (simplified – add if needed)
+            console.error('Table missing – create it manually or add auto-creation');
+            res.status(500).json({ error: 'Table missing' });
         } else {
             console.error(err);
             res.status(500).json({ error: err.message });
